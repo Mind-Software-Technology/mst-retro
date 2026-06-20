@@ -51,14 +51,27 @@ export const THEMES: Record<ThemeType, Theme> = {
   },
 };
 
+export interface Note {
+  id: string;
+  authorName: string;
+  text: string;
+  timestamp: number;
+}
+
 export interface Feedback {
   id: string;
   authorName: string;
   isAnonymous: boolean;
-  category1: string; // E.g., What went well
-  category2: string; // E.g., What didn't go well
-  category3: string; // E.g., Improvement Ideas
+  categoryId: string; // The ID of the category this feedback belongs to
+  content: string;    // The actual feedback text
+  notes: Note[];      // Discussion notes
   timestamp: number;
+}
+
+export interface Participant {
+  id: string;      // PeerJS ID
+  name: string;    // User chosen name
+  isHost: boolean;
 }
 
 export interface RetrospectiveSession {
@@ -67,4 +80,5 @@ export interface RetrospectiveSession {
   date: string;
   theme: ThemeType | null;
   feedbacks: Feedback[];
+  participants?: Participant[];
 }

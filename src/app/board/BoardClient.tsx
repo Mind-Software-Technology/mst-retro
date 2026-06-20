@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { THEMES, ThemeType, Feedback, RetrospectiveSession } from '@/types/retrospective';
+import { THEMES, ThemeType, Feedback, RetrospectiveSession, Participant, Note } from '@/types/retrospective';
 import ThemeSelector from '@/components/ThemeSelector';
 import FeedbackForm from '@/components/FeedbackForm';
 import FeedbackList from '@/components/FeedbackList';
@@ -40,10 +40,21 @@ export default function BoardClient() {
   const [errorMsg, setErrorMsg] = useState('');
   const [peerCount, setPeerCount] = useState(1);
 
+  // User & Participants State
+  const [myName, setMyName] = useState('');
+  const [isAnonymous, setIsAnonymous] = useState(false);
+  const [participants, setParticipants] = useState<Participant[]>([]);
+
   // Refs for P2P
   const peerRef = useRef<Peer | null>(null);
   const connectionsRef = useRef<DataConnection[]>([]);
   const hostConnectionRef = useRef<DataConnection | null>(null);
+
+  // Ref for fresh state access in P2P callbacks
+  const stateRef = useRef({ teamName, sprintName, date, themeId, feedbacks, participants });
+  useEffect(() => {
+    stateRef.current = { teamName, sprintName, date, themeId, feedbacks, participants };
+  }, [teamName, sprintName, date, themeId, feedbacks, participants]);
 
   useEffect(() => {
     const today = new Date();
@@ -52,20 +63,26 @@ export default function BoardClient() {
 
   // INIT PEERJS
   useEffect(() => {
-    // We only initialize Peer on client side dynamically to avoid SSR issues
+    let isMounted = true;
+    let localPeer: Peer | null = null;
+
     const initPeer = async () => {
       const { default: PeerJs } = await import('peerjs');
-      const peer = new PeerJs();
-      peerRef.current = peer;
+      if (!isMounted) return;
 
-      peer.on('open', (id) => {
+      localPeer = new PeerJs();
+      peerRef.current = localPeer;
+
+      localPeer.on('open', (id) => {
+        if (!isMounted) return;
         setPeerId(id);
         if (isClientMode) {
-          connectToHost(peer, hostId);
+          connectToHost(localPeer!, hostId);
         }
       });
 
-      peer.on('error', (err) => {
+      localPeer.on('error', (err) => {
+        if (!isMounted) return;
         console.error(err);
         setErrorMsg('P2P Error: ' + err.message);
         setStep('setup');
@@ -73,27 +90,41 @@ export default function BoardClient() {
 
       // If we are Host, listen for connections
       if (!isClientMode) {
-        peer.on('connection', (conn) => {
+        localPeer.on('connection', (conn) => {
           conn.on('open', () => {
             connectionsRef.current.push(conn);
             setPeerCount(connectionsRef.current.length + 1);
-            
-            // Send current state to new client
-            conn.send({
-              type: 'SYNC_STATE',
-              payload: { teamName, sprintName, date, themeId, feedbacks }
-            });
           });
 
           conn.on('data', (data: any) => {
-            if (data.type === 'ADD_FEEDBACK') {
+            if (data.type === 'REQUEST_SYNC') {
+              conn.send({
+                type: 'SYNC_STATE',
+                payload: stateRef.current
+              });
+            } else if (data.type === 'ADD_FEEDBACK') {
               handleNewFeedbackAsHost(data.payload);
+            } else if (data.type === 'UPDATE_NAME') {
+              setParticipants(prev => {
+                const existing = prev.find(p => p.id === data.payload.id);
+                if (existing) {
+                  return prev.map(p => p.id === data.payload.id ? { ...p, name: data.payload.name } : p);
+                }
+                return [...prev, { id: data.payload.id, name: data.payload.name, isHost: false }];
+              });
+            } else if (data.type === 'ADD_NOTE') {
+              handleAddNoteAsHost(data.payload.feedbackId, data.payload.note);
             }
           });
 
           conn.on('close', () => {
             connectionsRef.current = connectionsRef.current.filter(c => c.peer !== conn.peer);
             setPeerCount(connectionsRef.current.length + 1);
+            setParticipants(prev => prev.filter(p => p.id !== conn.peer));
+          });
+
+          conn.on('error', (err) => {
+            console.error('Connection error:', err);
           });
         });
       }
@@ -102,20 +133,30 @@ export default function BoardClient() {
     initPeer();
 
     return () => {
-      if (peerRef.current) {
-        peerRef.current.destroy();
+      isMounted = false;
+      if (localPeer) {
+        localPeer.destroy();
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isClientMode]); // run once based on mode
+  }, [isClientMode]); // MUST ONLY BE [isClientMode]. Do not add state dependencies here or the connection drops on every keystroke!
 
   // Client connecting to host
   const connectToHost = (peer: Peer, targetHostId: string) => {
-    const conn = peer.connect(targetHostId);
+    const conn = peer.connect(targetHostId, { reliable: true });
     hostConnectionRef.current = conn;
 
+    const timeout = setTimeout(() => {
+      if (step !== 'board') {
+        setErrorMsg('Gagal terhubung. Pastikan Host masih online di halamannya dan jaringan tidak memblokir WebRTC (Firewall/VPN).');
+        setStep('setup');
+      }
+    }, 15000); // 15 seconds timeout
+
     conn.on('open', () => {
-      setStep('board');
+      clearTimeout(timeout);
+      // Request initial state from host
+      conn.send({ type: 'REQUEST_SYNC' });
     });
 
     conn.on('data', (data: any) => {
@@ -125,13 +166,23 @@ export default function BoardClient() {
         setSprintName(payload.sprintName);
         setDate(payload.date);
         setThemeId(payload.themeId);
-        setFeedbacks(payload.feedbacks);
+        setFeedbacks(payload.feedbacks || []);
+        setParticipants(payload.participants || []);
+        setStep('board'); // Move to board ONLY after getting data
       }
     });
 
     conn.on('close', () => {
+      clearTimeout(timeout);
       setErrorMsg('Koneksi dengan Host terputus.');
       setStep('setup'); // Fallback
+    });
+
+    conn.on('error', (err) => {
+      clearTimeout(timeout);
+      console.error('Conn Error:', err);
+      setErrorMsg('Koneksi Error: ' + err.message);
+      setStep('setup');
     });
   };
 
@@ -139,14 +190,14 @@ export default function BoardClient() {
   const handleNewFeedbackAsHost = (feedback: Feedback) => {
     setFeedbacks(prev => {
       const newFeedbacks = [feedback, ...prev];
-      broadcastState(newFeedbacks);
+      broadcastState({ feedbacks: newFeedbacks });
       return newFeedbacks;
     });
   };
 
   // Host broadcasting state
-  const broadcastState = (currentFeedbacks: Feedback[]) => {
-    const statePayload = { teamName, sprintName, date, themeId, feedbacks: currentFeedbacks };
+  const broadcastState = (currentState: Partial<typeof stateRef.current>) => {
+    const statePayload = { ...stateRef.current, ...currentState };
     connectionsRef.current.forEach(conn => {
       if (conn.open) {
         conn.send({ type: 'SYNC_STATE', payload: statePayload });
@@ -154,13 +205,47 @@ export default function BoardClient() {
     });
   };
 
+  // Host adding a note
+  const handleAddNoteAsHost = (feedbackId: string, note: Note) => {
+    setFeedbacks(prev => {
+      const newFeedbacks = prev.map(f => {
+        if (f.id === feedbackId) {
+          return { ...f, notes: [...(f.notes || []), note] };
+        }
+        return f;
+      });
+      broadcastState({ feedbacks: newFeedbacks });
+      return newFeedbacks;
+    });
+  };
+
   // Sync state changes explicitly from host UI
   useEffect(() => {
     if (!isClientMode && step === 'board') {
-      broadcastState(feedbacks);
+      broadcastState({});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teamName, sprintName, date, themeId]); 
+  }, [teamName, sprintName, date, themeId, participants]); // feedbacks handled directly to avoid loops
+
+  // Update participant name
+  useEffect(() => {
+    if (peerId && step === 'board') {
+      if (isClientMode) {
+        if (hostConnectionRef.current?.open) {
+          hostConnectionRef.current.send({ type: 'UPDATE_NAME', payload: { id: peerId, name: isAnonymous ? 'Anonymous' : myName } });
+        }
+      } else {
+        setParticipants(prev => {
+          const nameToUse = isAnonymous ? 'Anonymous Host' : (myName || 'Host');
+          const existing = prev.find(p => p.id === peerId);
+          if (existing) {
+            return prev.map(p => p.id === peerId ? { ...p, name: nameToUse } : p);
+          }
+          return [...prev, { id: peerId, name: nameToUse, isHost: true }];
+        });
+      }
+    }
+  }, [myName, isAnonymous, peerId, step, isClientMode]);
 
   // UI Handlers
   const handleStart = (selectedTheme: ThemeType) => {
@@ -172,11 +257,12 @@ export default function BoardClient() {
     setStep('board');
   };
 
-  const handleAddFeedback = (newFeedback: Omit<Feedback, 'id' | 'timestamp'>) => {
+  const handleAddFeedback = (newFeedback: Omit<Feedback, 'id' | 'timestamp' | 'notes'>) => {
     const feedback: Feedback = {
       ...newFeedback,
       id: crypto.randomUUID(),
       timestamp: Date.now(),
+      notes: [],
     };
     
     if (isClientMode) {
@@ -192,6 +278,23 @@ export default function BoardClient() {
     }
   };
 
+  const handleAddNote = (feedbackId: string, text: string) => {
+    const note: Note = {
+      id: crypto.randomUUID(),
+      authorName: isAnonymous ? 'Anonymous' : (myName || 'Unknown'),
+      text,
+      timestamp: Date.now()
+    };
+
+    if (isClientMode) {
+      if (hostConnectionRef.current?.open) {
+        hostConnectionRef.current.send({ type: 'ADD_NOTE', payload: { feedbackId, note } });
+      }
+    } else {
+      handleAddNoteAsHost(feedbackId, note);
+    }
+  };
+
   const copyRoomLink = () => {
     const url = `${window.location.origin}/board?room=${peerId}`;
     navigator.clipboard.writeText(url);
@@ -204,7 +307,7 @@ export default function BoardClient() {
   const actionItemsList = useMemo(() => generateActionItems(feedbacks, theme), [feedbacks, theme]);
   
   const topTopics = useMemo(() => {
-    const allTexts = feedbacks.map(f => `${f.category1} ${f.category2} ${f.category3}`);
+    const allTexts = feedbacks.map(f => f.content);
     return extractKeywords(allTexts).slice(0, 5).map(k => k.word);
   }, [feedbacks]);
 
@@ -213,7 +316,8 @@ export default function BoardClient() {
     sprintName,
     date,
     theme: themeId,
-    feedbacks
+    feedbacks,
+    participants
   };
 
   if (step === 'connecting') {
@@ -273,7 +377,18 @@ export default function BoardClient() {
     );
   }
 
-  if (!theme) return null;
+  if (!theme) {
+    if (step === 'board') {
+      return (
+        <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-6 text-center space-y-4">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
+          <h2 className="text-xl font-semibold">Menyinkronkan Data...</h2>
+          <p className="text-muted-foreground text-sm">Menunggu data awal dari Host.</p>
+        </div>
+      );
+    }
+    return null;
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-4 md:p-6 flex flex-col">
@@ -322,42 +437,76 @@ export default function BoardClient() {
       </div>
 
       {/* Main Board */}
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <div className="flex-1 flex flex-col lg:flex-row gap-6 pb-24">
         
-        {/* Left Column: Form */}
-        <div className="lg:col-span-3 space-y-6">
-          <FeedbackForm theme={theme} onAddFeedback={handleAddFeedback} />
-          {isClientMode && (
+        {/* Left Column: Form & Info */}
+        <div className="w-full lg:w-80 flex flex-col gap-6 shrink-0">
+          <FeedbackForm 
+            theme={theme} 
+            onAddFeedback={handleAddFeedback} 
+            myName={myName}
+            setMyName={setMyName}
+            isAnonymous={isAnonymous}
+            setIsAnonymous={setIsAnonymous}
+          />
+          {isClientMode ? (
             <Card className="bg-orange-50/50 dark:bg-orange-950/20 border-orange-200 dark:border-orange-900/50">
               <CardContent className="p-4 text-xs text-orange-800 dark:text-orange-300">
-                Anda terhubung ke ruangan <strong>{hostId}</strong>. Data disinkronkan secara real-time dengan Host. Jangan tutup browser jika sesi belum selesai.
+                Anda terhubung ke ruangan <strong>{hostId}</strong>. Data disinkronkan secara real-time dengan Host.
               </CardContent>
             </Card>
-          )}
-          {!isClientMode && (
+          ) : (
             <Card className="bg-green-50/50 dark:bg-green-950/20 border-green-200 dark:border-green-900/50">
               <CardContent className="p-4 text-xs text-green-800 dark:text-green-300">
                 Anda adalah <strong>Host</strong>. Bagikan link ruangan ke tim Anda agar mereka bisa mengirim feedback. Jangan tutup browser selama sesi berlangsung.
               </CardContent>
             </Card>
           )}
+
+          <div className="space-y-6">
+            <SummaryPanel summary={summary} />
+            <ActionItems items={actionItemsList} />
+          </div>
         </div>
 
-        {/* Middle Column: Feedback List */}
-        <div className="lg:col-span-6 bg-card rounded-xl border shadow-sm p-4 flex flex-col max-h-[80vh]">
-          <h2 className="text-lg font-semibold mb-4 text-foreground border-b pb-2">Board</h2>
-          <FeedbackList feedbacks={feedbacks} theme={theme} />
-        </div>
-
-        {/* Right Column: AI Summary & Stats */}
-        <div className="lg:col-span-3 space-y-6">
-          <SummaryPanel summary={summary} />
-          <ActionItems items={actionItemsList} />
-          <StatisticsCard 
-            totalFeedback={feedbacks.length}
-            totalParticipants={new Set(feedbacks.map(f => f.authorName || 'Anonymous')).size}
-            topTopics={topTopics}
+        {/* Middle/Right Column: Kanban Board */}
+        <div className="flex-1 bg-slate-100/50 dark:bg-slate-900/20 rounded-xl border border-dashed border-border/60 p-4">
+          <FeedbackList 
+            feedbacks={feedbacks} 
+            theme={theme} 
+            onAddNote={handleAddNote} 
+            myName={myName} 
           />
+        </div>
+      </div>
+
+      {/* Participants Bottom Bar */}
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white/90 dark:bg-slate-950/90 backdrop-blur-md border shadow-xl rounded-full px-6 py-3 flex items-center gap-4 z-50 transition-all">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center justify-center bg-muted/50 p-1.5 rounded-full">
+             <UsersIcon className="w-4 h-4 text-muted-foreground" />
+          </div>
+          <div className="flex -space-x-2">
+            {participants.map((p, i) => (
+              <div 
+                key={p.id} 
+                className="w-8 h-8 rounded-full text-white border-2 border-background flex items-center justify-center text-xs font-bold ring-2 ring-transparent hover:ring-primary/50 hover:-translate-y-1 hover:z-50 transition-all cursor-help shadow-sm"
+                title={`${p.name} ${p.isHost ? '(Host)' : ''}`}
+                style={{ zIndex: participants.length - i, backgroundColor: `hsl(${(i * 45) % 360}, 70%, 45%)` }}
+              >
+                {p.name.charAt(0).toUpperCase()}
+              </div>
+            ))}
+          </div>
+          <span className="text-sm font-semibold ml-1">{participants.length} Orang Terhubung</span>
+        </div>
+        <div className="h-4 w-px bg-border mx-2"></div>
+        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+          </span>
+          Live
         </div>
       </div>
     </div>

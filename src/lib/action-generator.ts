@@ -4,28 +4,26 @@ import { extractKeywords } from './keyword-extractor';
 export function generateActionItems(feedbacks: Feedback[], theme: Theme | null): string[] {
   if (!feedbacks.length || !theme) return [];
 
-  // Kita fokus pada kategori 3 (Improvement/Destination/Continue) dan kategori 2 (Didn't go well/Sad/Stop)
-  const improvementTexts = feedbacks.map(f => f.category3).filter(t => t.trim().length > 0);
-  const negativeTexts = feedbacks.map(f => f.category2).filter(t => t.trim().length > 0);
-
-  const actionKeywords = extractKeywords([...improvementTexts, ...negativeTexts]);
+  const improvementCategory = theme.categories[2];
   
-  const actionItems: string[] = [];
-
-  // Jika tidak ada teks yang memadai
-  if (actionKeywords.length === 0) {
-    return ["Diskusikan lebih lanjut untuk menentukan action items konkrit."];
-  }
-
-  // Buat action items dari keyword paling sering muncul
-  const topKeywords = actionKeywords.slice(0, 5);
-
-  const actionVerbs = ['Tingkatkan', 'Perbaiki', 'Fokus pada', 'Evaluasi kembali', 'Implementasikan'];
-  
-  topKeywords.forEach((kw, index) => {
-    const verb = actionVerbs[index % actionVerbs.length];
-    actionItems.push(`${verb} proses yang berkaitan dengan "${kw.word}"`);
+  const improvementTexts = feedbacks
+    .filter(f => f.categoryId === improvementCategory.id)
+    .map(f => f.content);
+    
+  feedbacks.forEach(f => {
+    if (f.notes) {
+      improvementTexts.push(...f.notes.map(n => n.text));
+    }
   });
 
-  return actionItems;
+  const keywords = extractKeywords(improvementTexts).slice(0, 4);
+  
+  if (keywords.length === 0) return ["Diskusikan lebih lanjut untuk menentukan action items konkrit."];
+
+  const actionVerbs = ["Tingkatkan", "Perbaiki", "Evaluasi kembali", "Lanjutkan"];
+  
+  return keywords.map((kw, index) => {
+    const verb = actionVerbs[index % actionVerbs.length];
+    return `${verb} proses atau diskusi terkait "${kw.word}" untuk sprint berikutnya.`;
+  });
 }

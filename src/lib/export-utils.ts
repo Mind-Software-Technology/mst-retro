@@ -35,16 +35,26 @@ export function exportToPDF(session: RetrospectiveSession, summary: string, acti
 
   // Table
   currentY += 4;
-  const tableData = session.feedbacks.map(f => [
-    f.isAnonymous ? 'Anonymous' : f.authorName,
-    f.category1,
-    f.category2,
-    f.category3
-  ]);
+  
+  const tableData: any[] = [];
+  theme.categories.forEach(cat => {
+    const catFeedbacks = session.feedbacks.filter(f => f.categoryId === cat.id);
+    if (catFeedbacks.length > 0) {
+      // Add category header row
+      tableData.push([{ content: `--- ${cat.name} ---`, colSpan: 2, styles: { fontStyle: 'bold', halign: 'center' } }]);
+      catFeedbacks.forEach(f => {
+        let text = f.content;
+        if (f.notes && f.notes.length > 0) {
+          text += '\n\nNotes:\n' + f.notes.map(n => `- ${n.authorName}: ${n.text}`).join('\n');
+        }
+        tableData.push([f.isAnonymous ? 'Anonymous' : f.authorName, text]);
+      });
+    }
+  });
 
   autoTable(doc, {
     startY: currentY,
-    head: [['Participant', theme.categories[0].name, theme.categories[1].name, theme.categories[2].name]],
+    head: [['Participant', 'Feedback']],
     body: tableData,
   });
 
@@ -66,13 +76,25 @@ export function exportToMarkdown(session: RetrospectiveSession, summary: string,
   });
   md += `\n`;
 
-  md += `## Feedback\n\n`;
-  md += `| Participant | ${theme.categories[0].name} | ${theme.categories[1].name} | ${theme.categories[2].name} |\n`;
-  md += `|---|---|---|---|\n`;
+  md += `## Feedback Board\n\n`;
   
-  session.feedbacks.forEach(f => {
-    const name = f.isAnonymous ? 'Anonymous' : f.authorName;
-    md += `| ${name} | ${f.category1.replace(/\n/g, '<br>')} | ${f.category2.replace(/\n/g, '<br>')} | ${f.category3.replace(/\n/g, '<br>')} |\n`;
+  theme.categories.forEach(cat => {
+    md += `### ${cat.icon} ${cat.name}\n\n`;
+    const catFeedbacks = session.feedbacks.filter(f => f.categoryId === cat.id);
+    if (catFeedbacks.length === 0) {
+      md += `*No feedback in this category*\n\n`;
+    } else {
+      catFeedbacks.forEach(f => {
+        const name = f.isAnonymous ? 'Anonymous' : f.authorName;
+        md += `- **${name}**: ${f.content.replace(/\n/g, ' ')}\n`;
+        if (f.notes && f.notes.length > 0) {
+          f.notes.forEach(n => {
+            md += `  - *${n.authorName}*: ${n.text}\n`;
+          });
+        }
+      });
+      md += `\n`;
+    }
   });
 
   const blob = new Blob([md], { type: 'text/markdown' });
@@ -100,15 +122,26 @@ export function exportToTxt(session: RetrospectiveSession, summary: string, acti
   });
   txt += `\n`;
 
-  txt += `[ FEEDBACK ]\n`;
-  session.feedbacks.forEach(f => {
-    txt += `----------------------------------------------\n`;
-    txt += `Participant: ${f.isAnonymous ? 'Anonymous' : f.authorName}\n`;
-    txt += `${theme.categories[0].name}:\n${f.category1 || '-'}\n\n`;
-    txt += `${theme.categories[1].name}:\n${f.category2 || '-'}\n\n`;
-    txt += `${theme.categories[2].name}:\n${f.category3 || '-'}\n`;
+  txt += `[ FEEDBACK BOARD ]\n\n`;
+  
+  theme.categories.forEach(cat => {
+    txt += `--- ${cat.name.toUpperCase()} ---\n`;
+    const catFeedbacks = session.feedbacks.filter(f => f.categoryId === cat.id);
+    if (catFeedbacks.length === 0) {
+      txt += `(Empty)\n\n`;
+    } else {
+      catFeedbacks.forEach(f => {
+        const name = f.isAnonymous ? 'Anonymous' : f.authorName;
+        txt += `[${name}]: ${f.content}\n`;
+        if (f.notes && f.notes.length > 0) {
+          f.notes.forEach(n => {
+            txt += `  -> Note by ${n.authorName}: ${n.text}\n`;
+          });
+        }
+        txt += `\n`;
+      });
+    }
   });
-  txt += `----------------------------------------------\n`;
 
   const blob = new Blob([txt], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
