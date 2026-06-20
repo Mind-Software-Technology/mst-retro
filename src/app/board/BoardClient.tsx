@@ -88,8 +88,16 @@ export default function BoardClient() {
       }
     });
 
-    localPeer.on('error', (err) => {
+    localPeer.on('error', (err: any) => {
       console.error(err);
+      
+      // Jika Host mencoba resume tapi ID lama masih nyangkut di server PeerJS
+      if (err.type === 'unavailable-id') {
+        alert('Tautan ruangan sebelumnya masih "nyangkut" di server. Sistem otomatis membuatkan tautan baru. Data Anda tetap aman!');
+        initPeer(); // Panggil ulang tanpa customId
+        return;
+      }
+
       setErrorMsg('P2P Error: ' + err.message);
       setStep('setup');
     });
