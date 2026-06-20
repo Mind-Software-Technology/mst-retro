@@ -6,24 +6,31 @@ export function exportToPDF(session: RetrospectiveSession, summary: string, acti
   const doc = new jsPDF();
   const theme = THEMES[session.theme!];
 
+  // Company Header
+  doc.setFontSize(10);
+  doc.setTextColor(100);
+  doc.text('MST (Mind Software Technology)', 14, 15);
+  doc.line(14, 18, 196, 18); // Draw a line under the header
+
   // Title
+  doc.setTextColor(0); // Reset to black
   doc.setFontSize(20);
-  doc.text(`Sprint Retrospective: ${session.sprintName}`, 14, 22);
+  doc.text(`Sprint Retrospective: ${session.sprintName}`, 14, 28);
   
   doc.setFontSize(12);
-  doc.text(`Team: ${session.teamName || 'N/A'}`, 14, 30);
-  doc.text(`Date: ${session.date}`, 14, 36);
-  doc.text(`Theme: ${theme.name}`, 14, 42);
+  doc.text(`Team: ${session.teamName || 'N/A'}`, 14, 36);
+  doc.text(`Date: ${session.date}`, 14, 42);
+  doc.text(`Theme: ${theme.name}`, 14, 48);
 
   // Summary
   doc.setFontSize(14);
-  doc.text('Summary', 14, 52);
+  doc.text('Summary', 14, 58);
   doc.setFontSize(11);
   const splitSummary = doc.splitTextToSize(summary, 180);
-  doc.text(splitSummary, 14, 58);
+  doc.text(splitSummary, 14, 64);
 
   // Action Items
-  let currentY = 58 + (splitSummary.length * 6) + 4;
+  let currentY = 64 + (splitSummary.length * 6) + 4;
   doc.setFontSize(14);
   doc.text('Action Items', 14, currentY);
   doc.setFontSize(11);
