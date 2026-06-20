@@ -2,35 +2,25 @@ import { Feedback, Theme } from '@/types/retrospective';
 import { extractKeywords } from './keyword-extractor';
 
 export function generateSummary(feedbacks: Feedback[], theme: Theme | null): string {
-  if (!feedbacks.length || !theme) return "Belum ada feedback untuk disimpulkan.";
+  if (!feedbacks.length || !theme) return "Belum ada feedback untuk dirangkum.";
 
-  const total = feedbacks.length;
-  
-  const categoryCounts = theme.categories.map(cat => {
-    return {
-      catName: cat.name,
-      count: feedbacks.filter(f => f.categoryId === cat.id).length
-    };
+  let summary = "Rangkuman masukan dari seluruh tim:\n\n";
+
+  theme.categories.forEach(cat => {
+    const catFeedbacks = feedbacks.filter(f => f.categoryId === cat.id);
+    if (catFeedbacks.length > 0) {
+      summary += `[${cat.name}]\n`;
+      catFeedbacks.forEach(f => {
+        summary += `- ${f.content}\n`;
+        if (f.notes && f.notes.length > 0) {
+          f.notes.forEach(n => {
+            summary += `  ↳ Diskusi: ${n.text}\n`;
+          });
+        }
+      });
+      summary += '\n';
+    }
   });
-  
-  categoryCounts.sort((a, b) => b.count - a.count);
-  const mostActiveCat = categoryCounts[0];
 
-  let summary = `Tim telah mengumpulkan total ${total} poin feedback. Kriteria yang paling banyak disorot pada sesi ini adalah "${mostActiveCat.catName}" dengan ${mostActiveCat.count} masukan.\n\n`;
-
-  const allTexts = feedbacks.map(f => f.content);
-  feedbacks.forEach(f => {
-    if (f.notes) allTexts.push(...f.notes.map(n => n.text));
-  });
-  
-  const keywords = extractKeywords(allTexts).slice(0, 4).map(k => k.word);
-  
-  if (keywords.length > 0) {
-    summary += `Topik atau kata kunci yang paling sering dibahas meliputi: ${keywords.map(k => `"${k}"`).join(', ')}. `;
-    summary += `Sangat disarankan untuk mendiskusikan area ini lebih dalam.`;
-  } else {
-    summary += `Teks yang diberikan terlalu pendek untuk diekstrak polanya. Lakukan diskusi secara langsung untuk menggali konteks lebih lanjut.`;
-  }
-
-  return summary;
+  return summary.trim();
 }
