@@ -4,30 +4,32 @@ import { extractKeywords } from './keyword-extractor';
 export function generateSummary(feedbacks: Feedback[], theme: Theme | null): string {
   if (!feedbacks.length || !theme) return "Belum ada feedback untuk disimpulkan.";
 
-  const cat1Texts = feedbacks.filter(f => f.categoryId === theme.categories[0].id).map(f => f.content);
-  const cat2Texts = feedbacks.filter(f => f.categoryId === theme.categories[1].id).map(f => f.content);
-  const cat3Texts = feedbacks.filter(f => f.categoryId === theme.categories[2].id).map(f => f.content);
+  const total = feedbacks.length;
+  
+  const categoryCounts = theme.categories.map(cat => {
+    return {
+      catName: cat.name,
+      count: feedbacks.filter(f => f.categoryId === cat.id).length
+    };
+  });
+  
+  categoryCounts.sort((a, b) => b.count - a.count);
+  const mostActiveCat = categoryCounts[0];
 
-  const cat1Keywords = extractKeywords(cat1Texts).slice(0, 2).map(k => k.word);
-  const cat2Keywords = extractKeywords(cat2Texts).slice(0, 2).map(k => k.word);
-  const cat3Keywords = extractKeywords(cat3Texts).slice(0, 2).map(k => k.word);
+  let summary = `Tim telah mengumpulkan total ${total} poin feedback. Kriteria yang paling banyak disorot pada sesi ini adalah "${mostActiveCat.catName}" dengan ${mostActiveCat.count} masukan.\n\n`;
 
-  let summary = `Secara keseluruhan, tim telah memberikan ${feedbacks.length} poin feedback. `;
-
-  if (cat1Keywords.length > 0) {
-    summary += `Hal-hal positif yang menonjol berkaitan dengan ${cat1Keywords.join(' dan ')}. `;
-  }
-
-  if (cat2Keywords.length > 0) {
-    summary += `Namun, ada beberapa hal yang perlu diperhatikan terkait ${cat2Keywords.join(' dan ')}. `;
-  }
-
-  if (cat3Keywords.length > 0) {
-    summary += `Sebagai langkah ke depan, tim menyarankan perbaikan pada area ${cat3Keywords.join(' dan ')}.`;
-  }
-
-  if (cat1Keywords.length === 0 && cat2Keywords.length === 0 && cat3Keywords.length === 0) {
-    summary = "Tim telah berpartisipasi, namun umpan balik terlalu singkat untuk dianalisis polanya secara mendalam. Komunikasi langsung mungkin lebih baik untuk menggali detail.";
+  const allTexts = feedbacks.map(f => f.content);
+  feedbacks.forEach(f => {
+    if (f.notes) allTexts.push(...f.notes.map(n => n.text));
+  });
+  
+  const keywords = extractKeywords(allTexts).slice(0, 4).map(k => k.word);
+  
+  if (keywords.length > 0) {
+    summary += `Topik atau kata kunci yang paling sering dibahas meliputi: ${keywords.map(k => `"${k}"`).join(', ')}. `;
+    summary += `Sangat disarankan untuk mendiskusikan area ini lebih dalam.`;
+  } else {
+    summary += `Teks yang diberikan terlalu pendek untuk diekstrak polanya. Lakukan diskusi secara langsung untuk menggali konteks lebih lanjut.`;
   }
 
   return summary;
