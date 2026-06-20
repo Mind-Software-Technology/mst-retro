@@ -33,6 +33,7 @@ export default function BoardClient() {
   const [themeId, setThemeId] = useState<ThemeType | null>(null);
   const [feedbacks, setFeedbacks] = useState<Feedback[]>([]);
   const [date, setDate] = useState('');
+  const [savedSession, setSavedSession] = useState<any>(null);
 
   // P2P State
   const [peerId, setPeerId] = useState<string>(''); // My ID
@@ -59,87 +60,93 @@ export default function BoardClient() {
   useEffect(() => {
     const today = new Date();
     setDate(today.toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' }));
-  }, []);
+    
+    // Check for saved session
+    if (!isClientMode) {
+      try {
+        const saved = localStorage.getItem('mst-retro-session');
+        if (saved) {
+          setSavedSession(JSON.parse(saved));
+        }
+      } catch (e) {
+        console.error('Failed to parse saved session');
+      }
+    }
+  }, [isClientMode]);
 
   // INIT PEERJS
-  useEffect(() => {
-    let isMounted = true;
-    let localPeer: Peer | null = null;
+  const initPeer = async (customId?: string) => {
+    const { default: PeerJs } = await import('peerjs');
 
-    const initPeer = async () => {
-      const { default: PeerJs } = await import('peerjs');
-      if (!isMounted) return;
+    const localPeer = customId ? new PeerJs(customId) : new PeerJs();
+    peerRef.current = localPeer;
 
-      localPeer = new PeerJs();
-      peerRef.current = localPeer;
-
-      localPeer.on('open', (id) => {
-        if (!isMounted) return;
-        setPeerId(id);
-        if (isClientMode) {
-          connectToHost(localPeer!, hostId);
-        }
-      });
-
-      localPeer.on('error', (err) => {
-        if (!isMounted) return;
-        console.error(err);
-        setErrorMsg('P2P Error: ' + err.message);
-        setStep('setup');
-      });
-
-      // If we are Host, listen for connections
-      if (!isClientMode) {
-        localPeer.on('connection', (conn) => {
-          conn.on('open', () => {
-            connectionsRef.current.push(conn);
-            setPeerCount(connectionsRef.current.length + 1);
-          });
-
-          conn.on('data', (data: any) => {
-            if (data.type === 'REQUEST_SYNC') {
-              conn.send({
-                type: 'SYNC_STATE',
-                payload: stateRef.current
-              });
-            } else if (data.type === 'ADD_FEEDBACK') {
-              handleNewFeedbackAsHost(data.payload);
-            } else if (data.type === 'UPDATE_NAME') {
-              setParticipants(prev => {
-                const existing = prev.find(p => p.id === data.payload.id);
-                if (existing) {
-                  return prev.map(p => p.id === data.payload.id ? { ...p, name: data.payload.name } : p);
-                }
-                return [...prev, { id: data.payload.id, name: data.payload.name, isHost: false }];
-              });
-            } else if (data.type === 'ADD_NOTE') {
-              handleAddNoteAsHost(data.payload.feedbackId, data.payload.note);
-            }
-          });
-
-          conn.on('close', () => {
-            connectionsRef.current = connectionsRef.current.filter(c => c.peer !== conn.peer);
-            setPeerCount(connectionsRef.current.length + 1);
-            setParticipants(prev => prev.filter(p => p.id !== conn.peer));
-          });
-
-          conn.on('error', (err) => {
-            console.error('Connection error:', err);
-          });
-        });
+    localPeer.on('open', (id) => {
+      setPeerId(id);
+      if (isClientMode) {
+        connectToHost(localPeer, hostId);
       }
-    };
+    });
 
-    initPeer();
+    localPeer.on('error', (err) => {
+      console.error(err);
+      setErrorMsg('P2P Error: ' + err.message);
+      setStep('setup');
+    });
 
+    // If we are Host, listen for connections
+    if (!isClientMode) {
+      localPeer.on('connection', (conn) => {
+        conn.on('open', () => {
+          connectionsRef.current.push(conn);
+          setPeerCount(connectionsRef.current.length + 1);
+        });
+
+        conn.on('data', (data: any) => {
+          if (data.type === 'REQUEST_SYNC') {
+            conn.send({
+              type: 'SYNC_STATE',
+              payload: stateRef.current
+            });
+          } else if (data.type === 'ADD_FEEDBACK') {
+            handleNewFeedbackAsHost(data.payload);
+          } else if (data.type === 'UPDATE_NAME') {
+            setParticipants(prev => {
+              const existing = prev.find(p => p.id === data.payload.id);
+              if (existing) {
+                return prev.map(p => p.id === data.payload.id ? { ...p, name: data.payload.name } : p);
+              }
+              return [...prev, { id: data.payload.id, name: data.payload.name, isHost: false }];
+            });
+          } else if (data.type === 'ADD_NOTE') {
+            handleAddNoteAsHost(data.payload.feedbackId, data.payload.note);
+          }
+        });
+
+        conn.on('close', () => {
+          connectionsRef.current = connectionsRef.current.filter(c => c.peer !== conn.peer);
+          setPeerCount(connectionsRef.current.length + 1);
+          setParticipants(prev => prev.filter(p => p.id !== conn.peer));
+        });
+
+        conn.on('error', (err) => {
+          console.error('Connection error:', err);
+        });
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (isClientMode) {
+      initPeer();
+    }
     return () => {
-      isMounted = false;
-      if (localPeer) {
-        localPeer.destroy();
+      if (peerRef.current) {
+        peerRef.current.destroy();
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isClientMode]); // MUST ONLY BE [isClientMode]. Do not add state dependencies here or the connection drops on every keystroke!
+  }, [isClientMode]);
 
   // Client connecting to host
   const connectToHost = (peer: Peer, targetHostId: string) => {
@@ -219,13 +226,27 @@ export default function BoardClient() {
     });
   };
 
-  // Sync state changes explicitly from host UI
+  // Sync state changes explicitly from host UI and auto-save
   useEffect(() => {
     if (!isClientMode && step === 'board') {
       broadcastState({});
+      
+      // Auto-save to LocalStorage
+      if (peerId) {
+        const sessionToSave = {
+          peerId,
+          teamName,
+          sprintName,
+          date,
+          themeId,
+          feedbacks,
+          participants
+        };
+        localStorage.setItem('mst-retro-session', JSON.stringify(sessionToSave));
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teamName, sprintName, date, themeId, participants]); // feedbacks handled directly to avoid loops
+  }, [teamName, sprintName, date, themeId, participants, feedbacks, peerId, step, isClientMode]);
 
   // Update participant name
   useEffect(() => {
@@ -253,8 +274,27 @@ export default function BoardClient() {
       alert('Tolong isi Sprint Name terlebih dahulu.');
       return;
     }
+    // Delete any old saved session
+    localStorage.removeItem('mst-retro-session');
+    
     setThemeId(selectedTheme);
+    initPeer(); // Generate new random ID
     setStep('board');
+  };
+
+  const handleResume = () => {
+    if (savedSession) {
+      setTeamName(savedSession.teamName);
+      setSprintName(savedSession.sprintName);
+      setDate(savedSession.date);
+      setThemeId(savedSession.themeId);
+      setFeedbacks(savedSession.feedbacks || []);
+      // We don't restore participants, they have to reconnect
+      setParticipants([]);
+      
+      initPeer(savedSession.peerId); // Re-use old ID so links work
+      setStep('board');
+    }
   };
 
   const handleAddFeedback = (newFeedback: Omit<Feedback, 'id' | 'timestamp' | 'notes'>) => {
@@ -341,9 +381,23 @@ export default function BoardClient() {
             {errorMsg && <p className="text-destructive font-medium">{errorMsg}</p>}
           </div>
 
+          {savedSession && (
+            <Card className="border-primary/50 shadow-lg shadow-primary/5 bg-primary/5">
+              <CardContent className="p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div>
+                  <h3 className="font-semibold text-lg text-primary">Sesi Sebelumnya Ditemukan</h3>
+                  <p className="text-sm text-muted-foreground">Anda memiliki ruangan yang belum selesai: <strong>{savedSession.sprintName}</strong> ({savedSession.feedbacks?.length || 0} feedback).</p>
+                </div>
+                <Button onClick={handleResume} size="lg" className="w-full sm:w-auto font-bold shrink-0">
+                  Lanjutkan Sesi Ini
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
-              <CardTitle>Sprint Details</CardTitle>
+              <CardTitle>Sprint Details {savedSession && <span className="text-sm font-normal text-muted-foreground ml-2">(Atau Buat Baru)</span>}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

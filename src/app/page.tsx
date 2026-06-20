@@ -1,10 +1,24 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
-import { ArrowRight, Users, Zap, LayoutTemplate, Sparkles } from 'lucide-react';
+import { ArrowRight, Users, Zap, LayoutTemplate, Sparkles, PlayCircle } from 'lucide-react';
 
 export default function LandingPage() {
+  const [savedSession, setSavedSession] = useState<any>(null);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('mst-retro-session');
+      if (saved) {
+        setSavedSession(JSON.parse(saved));
+      }
+    } catch (e) {
+      console.error('Failed to parse saved session');
+    }
+  }, []);
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center relative overflow-hidden">
       
@@ -30,6 +44,18 @@ export default function LandingPage() {
 
         {/* Action Button */}
         <div className="pt-6 space-y-8 flex flex-col items-center">
+          
+          {savedSession && (
+            <div className="mb-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <Link href="/board">
+                <Button size="lg" variant="outline" className="text-primary border-primary/50 hover:bg-primary/10 px-8 py-6 rounded-full shadow-lg font-bold">
+                  <PlayCircle className="mr-2 w-5 h-5" />
+                  Resume: {savedSession.sprintName}
+                </Button>
+              </Link>
+            </div>
+          )}
+
           <Link href="/board">
             <Button size="lg" className="text-lg px-10 py-7 rounded-full shadow-xl shadow-primary/20 hover:shadow-2xl hover:shadow-primary/30 hover:-translate-y-1 transition-all duration-300 font-bold bg-gradient-to-r from-primary to-blue-600 hover:from-primary hover:to-blue-500">
               Create New Room
