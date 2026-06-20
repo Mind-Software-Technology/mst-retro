@@ -15,7 +15,7 @@ export default function SummaryPanel({ summary }: SummaryPanelProps) {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <p className="text-sm leading-relaxed text-muted-foreground">
+        <p className="text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap">
           {summary}
         </p>
       </CardContent>
