@@ -10,6 +10,7 @@ import SummaryPanel from '@/components/SummaryPanel';
 import ActionItems from '@/components/ActionItems';
 import StatisticsCard from '@/components/StatisticsCard';
 import ExportButtons from '@/components/ExportButtons';
+import VoiceChat from '@/components/VoiceChat';
 import { generateSummary } from '@/lib/summary-generator';
 import { generateActionItems } from '@/lib/action-generator';
 import { extractKeywords } from '@/lib/keyword-extractor';
@@ -78,7 +79,23 @@ export default function BoardClient() {
   const initPeer = async (customId?: string) => {
     const { default: PeerJs } = await import('peerjs');
 
-    const localPeer = customId ? new PeerJs(customId) : new PeerJs();
+    // Optional TURN server so calls work behind strict NAT/firewalls.
+    const turnUrl = process.env.NEXT_PUBLIC_TURN_URL;
+    const options = turnUrl
+      ? {
+          config: {
+            iceServers: [
+              { urls: 'stun:stun.l.google.com:19302' },
+              {
+                urls: turnUrl.split(','),
+                username: process.env.NEXT_PUBLIC_TURN_USERNAME,
+                credential: process.env.NEXT_PUBLIC_TURN_CREDENTIAL,
+              },
+            ],
+          },
+        }
+      : undefined;
+    const localPeer = customId ? new PeerJs(customId, options) : new PeerJs(options ?? {});
     peerRef.current = localPeer;
 
     localPeer.on('open', (id) => {
@@ -541,6 +558,8 @@ export default function BoardClient() {
           />
         </div>
       </div>
+
+      <VoiceChat peerRef={peerRef} peerId={peerId} participants={participants} />
 
       {/* Participants Bottom Bar */}
       <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white/90 dark:bg-slate-950/90 backdrop-blur-md border shadow-xl rounded-full px-6 py-3 flex items-center gap-4 z-50 transition-all">
